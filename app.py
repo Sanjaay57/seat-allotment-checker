@@ -91,7 +91,6 @@ if st.button("🔍 Search") and uploaded_file and pasted_list:
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                         df.to_excel(writer, index=False, sheet_name='Matched')
-                        writer.save()
                     return output.getvalue()
 
                 st.download_button(
