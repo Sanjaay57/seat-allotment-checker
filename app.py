@@ -6,17 +6,17 @@ from PIL import Image
 import io
 import re
 
-st.set_page_config(page_title="Counselling/Allotment Checker", layout="wide")
+st.set_page_config(page_title="Seat Allotment Checker", layout="wide")
 st.title("🎓 Seat Allotment / Counselling Checker")
 
-# Step 1: Paste Input
+# Step 1: Input roll/application numbers
 pasted_data = st.text_area("📋 Paste Roll/Application Numbers (one per line):", height=200)
-pasted_list = [x.strip() for x in pasted_data.splitlines() if x.strip()]
+pasted_list = [x.strip().upper() for x in pasted_data.splitlines() if x.strip()]
 
-# Step 2: Upload PDF
+# Step 2: Upload PDF file
 uploaded_file = st.file_uploader("📄 Upload Seat Allotment PDF", type=["pdf"])
 
-# OCR fallback
+# OCR fallback for scanned pages
 def ocr_pdf_page(pdf_bytes, page_num):
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -28,81 +28,86 @@ def ocr_pdf_page(pdf_bytes, page_num):
     except Exception:
         return ""
 
-# Extract header and rows
+# Extract headers and rows from text
 def extract_table_from_text(text):
     lines = text.splitlines()
     headers = []
     data_rows = []
+
     for line in lines:
-        line = line.strip()
-        if not line:
+        clean_line = line.strip()
+        if not clean_line:
             continue
 
-        # Header detection
-        if not headers and any(keyword in line.lower() for keyword in ["roll", "application", "seat", "category", "rank", "remarks"]):
-            headers = re.split(r"\s{2,}", line.strip())
+        # Header line detection
+        if not headers and any(word in clean_line.lower() for word in ["roll", "application", "registration", "category", "merit", "marks"]):
+            headers = re.split(r"\s{2,}", clean_line)
             continue
 
+        # Extract rows
         if headers:
-            row = re.split(r"\s{2,}", line.strip())
-            if len(row) >= len(headers):  # Match or exceed header length
+            row = re.split(r"\s{2,}", clean_line)
+            if len(row) >= len(headers):
                 data_rows.append(row[:len(headers)])
 
     return headers, data_rows
 
-# Streamlit logic
+# Main processing
 if st.button("🔍 Search") and uploaded_file and pasted_list:
-    with st.spinner("Analyzing PDF..."):
+    with st.spinner("🔄 Analyzing PDF..."):
         pdf_bytes = uploaded_file.read()
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        full_rows = []
-        detected_headers = []
+
+        final_headers = []
+        all_rows = []
 
         for page_num in range(len(doc)):
             text = doc[page_num].get_text("text")
-            if not text.strip():  # Fallback to OCR
+
+            if not text.strip():  # fallback to OCR
                 text = ocr_pdf_page(pdf_bytes, page_num)
 
             headers, rows = extract_table_from_text(text)
             if headers and rows:
-                if not detected_headers:
-                    detected_headers = headers
-                full_rows.extend(rows)
+                if not final_headers:
+                    final_headers = headers
+                all_rows.extend(rows)
 
-        if not detected_headers or not full_rows:
-            st.error("❌ No valid table or headers detected. Please try another PDF.")
+        if not final_headers or not all_rows:
+            st.error("❌ Could not detect a valid table with headers. Please try another PDF.")
         else:
-            df = pd.DataFrame(full_rows, columns=detected_headers)
+            df = pd.DataFrame(all_rows, columns=final_headers)
 
-            # Detect the matching column
-            match_col = None
-            for col in df.columns:
-                if any(key in col.lower() for key in ["roll", "application", "reg", "id"]):
-                    match_col = col
-                    break
+            # Normalize column names and values
+            df.columns = [col.strip().upper() for col in df.columns]
+            df = df.applymap(lambda x: str(x).strip().upper() if pd.notnull(x) else x)
 
-            if not match_col:
-                st.warning("⚠️ Could not find a 'Roll No' or 'Application No' column.")
+            # Try matching across multiple possible columns
+            match_cols = [col for col in df.columns if any(key in col for key in ["ROLL", "APPLICATION", "REGISTRATION", "ID"])]
+
+            matched_df = pd.DataFrame()
+            pasted_set = set(pasted_list)
+
+            for col in match_cols:
+                matches = df[df[col].isin(pasted_set)]
+                matched_df = pd.concat([matched_df, matches], ignore_index=True)
+
+            if matched_df.empty:
+                st.info("🔍 No matches found in the PDF.")
             else:
-                df[match_col] = df[match_col].astype(str).str.strip()
-                matches = df[df[match_col].isin(pasted_list)]
+                st.success(f"✅ Found {len(matched_df)} match(es).")
+                st.dataframe(matched_df, use_container_width=True)
 
-                if matches.empty:
-                    st.info("🔍 No matches found.")
-                else:
-                    st.success(f"✅ Found {len(matches)} match(es).")
-                    st.dataframe(matches, use_container_width=True)
+                # Excel download
+                def convert_df(df):
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        df.to_excel(writer, index=False, sheet_name="Matched")
+                    return output.getvalue()
 
-                    # Download Excel
-                    def convert_df(df):
-                        output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                            df.to_excel(writer, index=False, sheet_name="Matched")
-                        return output.getvalue()
-
-                    st.download_button(
-                        "📥 Download Matched Results as Excel",
-                        data=convert_df(matches),
-                        file_name="matched_results.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                st.download_button(
+                    label="📥 Download Matched Results as Excel",
+                    data=convert_df(matched_df),
+                    file_name="matched_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
