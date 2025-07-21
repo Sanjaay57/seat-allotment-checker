@@ -4,48 +4,52 @@ import fitz  # PyMuPDF
 import io
 
 st.set_page_config(page_title="Seat Allotment Checker", layout="centered")
-st.title("🎓 Seat Allotment Checker")
+st.title("📋 Seat Allotment Search (Full Row Extract)")
 
-# --- Input Section ---
 uploaded_pdf = st.file_uploader("📄 Upload PDF", type=["pdf"])
-search_input = st.text_area("🔍 Enter values to search (one per line):", height=150, placeholder="Paste Application Nos, Roll Nos, etc.")
-search_button = st.button("🔎 Search")
+search_input = st.text_area("🔍 Enter values to search (one per line):", height=150)
+search_button = st.button("🔎 Search Now")
+
+def extract_rows_with_layout(pdf_stream, terms):
+    matches = []
+    doc = fitz.open(stream=pdf_stream, filetype="pdf")
+
+    for page in doc:
+        blocks = page.get_text("dict")["blocks"]
+        for block in blocks:
+            if "lines" not in block:
+                continue
+            for line in block["lines"]:
+                row_text = " ".join([span["text"] for span in line["spans"]]).strip()
+                if any(term in row_text for term in terms):
+                    matches.append(row_text)
+    return matches
 
 if uploaded_pdf and search_input and search_button:
-    with st.spinner("Processing PDF..."):
-        doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
+    with st.spinner("⏳ Processing PDF..."):
         search_terms = set(x.strip() for x in search_input.strip().splitlines() if x.strip())
 
-        matches = []
-        for page in doc:
-            text = page.get_text()
-            lines = text.splitlines()
-
-            for line in lines:
-                if any(term in line for term in search_terms):
-                    matches.append(line.strip())
+        matches = extract_rows_with_layout(uploaded_pdf.read(), search_terms)
 
         if matches:
-            # Attempt to split by multiple spaces or tabs
-            structured_data = []
+            # Try to split by consistent spacing
+            structured = []
             for line in matches:
-                columns = [col.strip() for col in line.split("  ") if col.strip()]
-                structured_data.append(columns)
+                parts = [p.strip() for p in line.split("  ") if p.strip()]
+                structured.append(parts)
 
-            # Determine max columns
-            max_cols = max(len(row) for row in structured_data)
-            col_names = [f"Field {i+1}" for i in range(max_cols)]
+            # Normalize row lengths
+            max_len = max(len(r) for r in structured)
+            structured = [r + [""] * (max_len - len(r)) for r in structured]
+            df = pd.DataFrame(structured, columns=[f"Field {i+1}" for i in range(max_len)])
 
-            # Pad rows to have equal length
-            padded_data = [row + [""] * (max_cols - len(row)) for row in structured_data]
-            df = pd.DataFrame(padded_data, columns=col_names)
-
-            st.success(f"✅ Found {len(matches)} matching entries.")
+            st.success(f"✅ Found {len(df)} matching entries.")
             st.dataframe(df, use_container_width=True)
 
             # Excel Download
-            excel_data = io.BytesIO()
-            df.to_excel(excel_data, index=False)
-            st.download_button("📥 Download as Excel", data=excel_data.getvalue(), file_name="Matched_Results.xlsx")
+            buffer = io.BytesIO()
+            df.to_excel(buffer, index=False)
+            st.download_button("📥 Download Results", data=buffer.getvalue(), file_name="Matches.xlsx")
+
         else:
             st.warning("🔍 No matches found in the PDF.")
