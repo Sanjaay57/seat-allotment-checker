@@ -1,55 +1,52 @@
 import streamlit as st
-import pandas as pd
 import fitz  # PyMuPDF
+import pandas as pd
 import io
 
-st.set_page_config(page_title="Seat Allotment Checker", layout="centered")
-st.title("📋 Seat Allotment Search (Full Row Extract)")
+st.set_page_config(page_title="Merit List Extractor", layout="centered")
+st.title("🎓 Merit List Extractor & Search Tool")
 
-uploaded_pdf = st.file_uploader("📄 Upload PDF", type=["pdf"])
-search_input = st.text_area("🔍 Enter values to search (one per line):", height=150)
-search_button = st.button("🔎 Search Now")
+# File Upload
+uploaded_pdf = st.file_uploader("📄 Upload a Merit List PDF (vertical format)", type=["pdf"])
 
-def extract_rows_with_layout(pdf_stream, terms):
-    matches = []
-    doc = fitz.open(stream=pdf_stream, filetype="pdf")
+if uploaded_pdf:
+    with st.spinner("🔄 Extracting data from PDF..."):
+        # Open and extract lines from PDF
+        doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
+        all_lines = []
+        for page in doc:
+            blocks = page.get_text("dict")["blocks"]
+            for block in blocks:
+                if "lines" not in block:
+                    continue
+                for line in block["lines"]:
+                    row = " ".join([span["text"] for span in line["spans"]]).strip()
+                    if row:
+                        all_lines.append(row)
 
-    for page in doc:
-        blocks = page.get_text("dict")["blocks"]
-        for block in blocks:
-            if "lines" not in block:
-                continue
-            for line in block["lines"]:
-                row_text = " ".join([span["text"] for span in line["spans"]]).strip()
-                if any(term in row_text for term in terms):
-                    matches.append(row_text)
-    return matches
+        # Extract headers and data
+        headers = all_lines[:5]  # Assumes 5 headers
+        data_lines = all_lines[5:]
+        rows = [data_lines[i:i+5] for i in range(0, len(data_lines), 5) if len(data_lines[i:i+5]) == 5]
 
-if uploaded_pdf and search_input and search_button:
-    with st.spinner("⏳ Processing PDF..."):
-        search_terms = set(x.strip() for x in search_input.strip().splitlines() if x.strip())
+        if rows:
+            df = pd.DataFrame(rows, columns=headers)
+            st.success(f"✅ Extracted {len(df)} rows from the merit list.")
 
-        matches = extract_rows_with_layout(uploaded_pdf.read(), search_terms)
+            # Optional Search
+            search_term = st.text_input("🔍 Search by Registration Number or Roll Number")
+            if search_term:
+                df_filtered = df[df.apply(lambda row: row.astype(str).str.contains(search_term, case=False).any(), axis=1)]
+                st.write(f"🔎 Showing results for: **{search_term}**")
+                st.dataframe(df_filtered, use_container_width=True)
+            else:
+                st.dataframe(df, use_container_width=True)
 
-        if matches:
-            # Try to split by consistent spacing
-            structured = []
-            for line in matches:
-                parts = [p.strip() for p in line.split("  ") if p.strip()]
-                structured.append(parts)
-
-            # Normalize row lengths
-            max_len = max(len(r) for r in structured)
-            structured = [r + [""] * (max_len - len(r)) for r in structured]
-            df = pd.DataFrame(structured, columns=[f"Field {i+1}" for i in range(max_len)])
-
-            st.success(f"✅ Found {len(df)} matching entries.")
-            st.dataframe(df, use_container_width=True)
-
-            # Excel Download
-            buffer = io.BytesIO()
-            df.to_excel(buffer, index=False)
-            st.download_button("📥 Download Results", data=buffer.getvalue(), file_name="Matches.xlsx")
-
+            # Download
+            output = io.BytesIO()
+            df.to_excel(output, index=False)
+            st.download_button("📥 Download Full Merit List (Excel)", data=output.getvalue(),
+                               file_name="merit_list.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
-            st.warning("🔍 No matches found in the PDF.")
+            st.warning("⚠️ Could not detect structured data from this PDF format.")
