@@ -1,60 +1,51 @@
 import streamlit as st
-import fitz  # PyMuPDF
 import pandas as pd
+import fitz  # PyMuPDF
 import io
 
-st.set_page_config(page_title="Seat Allotment / Counselling Checker", layout="centered")
+st.set_page_config(page_title="Seat Allotment Checker", layout="centered")
+st.title("🎓 Seat Allotment Checker")
 
-st.markdown("<h1 style='text-align: center;'>🎓 Seat Allotment / Counselling Checker</h1>", unsafe_allow_html=True)
+# --- Input Section ---
+uploaded_pdf = st.file_uploader("📄 Upload PDF", type=["pdf"])
+search_input = st.text_area("🔍 Enter values to search (one per line):", height=150, placeholder="Paste Application Nos, Roll Nos, etc.")
+search_button = st.button("🔎 Search")
 
-# Input box - Centered
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    user_input = st.text_area("📋 Paste Roll/Application Numbers (one per line):", height=200)
+if uploaded_pdf and search_input and search_button:
+    with st.spinner("Processing PDF..."):
+        doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
+        search_terms = set(x.strip() for x in search_input.strip().splitlines() if x.strip())
 
-# PDF upload - Centered
-with col2:
-    uploaded_pdf = st.file_uploader("📤 Upload Seat Allotment PDF", type="pdf")
-
-# Clean input values
-search_terms = set(line.strip() for line in user_input.splitlines() if line.strip())
-
-# Search button
-with col2:
-    if st.button("🔍 Search") and uploaded_pdf and search_terms:
         matches = []
-        pdf_doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
+        for page in doc:
+            text = page.get_text()
+            lines = text.splitlines()
 
-        for page in pdf_doc:
-            lines = page.get_text().split('\n')
             for line in lines:
-                for term in search_terms:
-                    if term in line:
-                        matches.append(line.strip())
-                        break  # Avoid duplicate if multiple terms in same line
+                if any(term in line for term in search_terms):
+                    matches.append(line.strip())
 
         if matches:
-            # Try to split lines into structured table using multiple spaces
-            def split_line(line):
-                return [part.strip() for part in line.split("  ") if part.strip()]
+            # Attempt to split by multiple spaces or tabs
+            structured_data = []
+            for line in matches:
+                columns = [col.strip() for col in line.split("  ") if col.strip()]
+                structured_data.append(columns)
 
-            split_matches = [split_line(line) for line in matches]
-            max_cols = max(len(row) for row in split_matches)
+            # Determine max columns
+            max_cols = max(len(row) for row in structured_data)
+            col_names = [f"Field {i+1}" for i in range(max_cols)]
 
-            # Normalize all rows to same length
-            normalized_data = [row + [""] * (max_cols - len(row)) for row in split_matches]
-
-            df = pd.DataFrame(normalized_data)
-            df.columns = [f"Field {i+1}" for i in range(df.shape[1])]
+            # Pad rows to have equal length
+            padded_data = [row + [""] * (max_cols - len(row)) for row in structured_data]
+            df = pd.DataFrame(padded_data, columns=col_names)
 
             st.success(f"✅ Found {len(matches)} matching entries.")
             st.dataframe(df, use_container_width=True)
 
-            # Download option
+            # Excel Download
             excel_data = io.BytesIO()
             df.to_excel(excel_data, index=False)
             st.download_button("📥 Download as Excel", data=excel_data.getvalue(), file_name="Matched_Results.xlsx")
         else:
-            st.warning("⚠️ No matches found. Please check your pasted data and try again.")
-    elif st.button("🔍 Search"):
-        st.error("❌ Please upload a PDF and enter roll/application numbers.")
+            st.warning("🔍 No matches found in the PDF.")
