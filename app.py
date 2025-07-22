@@ -11,44 +11,55 @@ pdf_file = st.file_uploader("📄 Upload Merit List PDF", type=["pdf"])
 input_text = st.text_area("🔍 Paste Roll / Application / Reg. Numbers (one per line):", height=150)
 search_button = st.button("🔎 Extract & Search")
 
-# Main logic
 if pdf_file and search_button:
     with st.spinner("🔍 Extracting from PDF..."):
         doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-        
-        # Extract all lines
+
+        # Read all lines
         lines = []
         for page in doc:
             page_lines = page.get_text("text").splitlines()
             lines += [line.strip() for line in page_lines if line.strip()]
-        
-        # First 5 lines are headers
-        headers = lines[:5]
-        data_lines = lines[5:]
-        num_fields = len(headers)
 
-        # Group every N lines as one row
-        records = [data_lines[i:i+num_fields] for i in range(0, len(data_lines), num_fields)
-                   if len(data_lines[i:i+num_fields]) == num_fields]
-        
-        df = pd.DataFrame(records, columns=headers)
-        st.success(f"✅ Extracted {len(df)} rows.")
+        if len(lines) < 10:
+            st.error("⚠️ Not enough content found in the PDF to process.")
+        else:
+            # Use first 5 lines as headers
+            headers = lines[:5]
+            num_fields = len(headers)
 
-        st.subheader("📋 Full Table")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+            # Remove repeated header blocks from lines
+            cleaned_lines = []
+            for i in range(0, len(lines), num_fields):
+                block = lines[i:i+num_fields]
+                if block == headers:
+                    continue  # skip repeated header
+                cleaned_lines.extend(block)
 
-        # Pasted search values
-        pasted_values = [x.strip() for x in input_text.splitlines() if x.strip()]
-        matched_df = df[df.apply(lambda row: any(val in str(cell) for val in pasted_values for cell in row), axis=1)]
+            # Group into rows
+            records = [cleaned_lines[i:i+num_fields] for i in range(0, len(cleaned_lines), num_fields)
+                       if len(cleaned_lines[i:i+num_fields]) == num_fields]
 
-        st.subheader("🎯 Matched Results")
-        st.success(f"✅ Found {len(matched_df)} matching row(s).")
-        st.dataframe(matched_df, use_container_width=True, hide_index=True)
+            df = pd.DataFrame(records, columns=headers)
+            st.success(f"✅ Extracted {len(df)} rows after cleaning repeated headers.")
 
-        # Download button
-        output = io.BytesIO()
-        matched_df.to_excel(output, index=False)
-        st.download_button("📥 Download Matched Results as Excel",
-                           data=output.getvalue(),
-                           file_name="matched_results.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.subheader("📋 Full Table")
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+            # Search
+            pasted_values = [x.strip() for x in input_text.splitlines() if x.strip()]
+            matched_df = df[df.apply(lambda row: any(val in str(cell) for val in pasted_values for cell in row), axis=1)]
+
+            st.subheader("🎯 Matched Results")
+            if not matched_df.empty:
+                st.success(f"✅ Found {len(matched_df)} matching row(s).")
+                st.dataframe(matched_df, use_container_width=True, hide_index=True)
+
+                output = io.BytesIO()
+                matched_df.to_excel(output, index=False)
+                st.download_button("📥 Download Matched Results as Excel",
+                                   data=output.getvalue(),
+                                   file_name="matched_results.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else:
+                st.warning("⚠️ No matches found. Please check your pasted data.")
