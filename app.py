@@ -35,7 +35,8 @@ if pdf_file and search_button:
         st.success(f"✅ Extracted {len(df)} rows.")
 
         st.subheader("📋 Full Table")
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
 
         # Pasted search values
         pasted_values = [x.strip() for x in input_text.splitlines() if x.strip()]
@@ -43,7 +44,7 @@ if pdf_file and search_button:
 
         st.subheader("🎯 Matched Results")
         st.success(f"✅ Found {len(matched_df)} matching row(s).")
-        st.dataframe(matched_df, use_container_width=True)
+        st.dataframe(matched_df, use_container_width=True, hide_index=True)
 
         # Download button
         output = io.BytesIO()
