@@ -1,36 +1,54 @@
 import streamlit as st
-from pdf2image import convert_from_bytes
-import pytesseract
-from io import BytesIO
-import tempfile
+import fitz  # PyMuPDF
+import pandas as pd
+import io
 
-# Set up Tesseract path (Windows only)
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+st.set_page_config(page_title="🎓 Merit PDF Checker", layout="centered")
+st.title("🎓 Merit List PDF Checker (Structured Vertical Records)")
 
-st.set_page_config(page_title="PDF OCR Extractor", layout="centered")
+# Upload and input
+pdf_file = st.file_uploader("📄 Upload Merit List PDF", type=["pdf"])
+input_text = st.text_area("🔍 Paste Roll / Application / Reg. Numbers (one per line):", height=150)
+search_button = st.button("🔎 Extract & Search")
 
-st.title("📄 OCR PDF Text Extractor")
-st.markdown("Upload a scanned PDF. This app will convert it to text using OCR (Tesseract).")
+# Main logic
+if pdf_file and search_button:
+    with st.spinner("🔍 Extracting from PDF..."):
+        doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+        
+        # Extract all lines
+        lines = []
+        for page in doc:
+            page_lines = page.get_text("text").splitlines()
+            lines += [line.strip() for line in page_lines if line.strip()]
+        
+        # First 5 lines are headers
+        headers = lines[:5]
+        data_lines = lines[5:]
+        num_fields = len(headers)
 
-uploaded_file = st.file_uploader("📎 Upload Scanned PDF", type=["pdf"])
+        # Group every N lines as one row
+        records = [data_lines[i:i+num_fields] for i in range(0, len(data_lines), num_fields)
+                   if len(data_lines[i:i+num_fields]) == num_fields]
+        
+        df = pd.DataFrame(records, columns=headers)
+        st.success(f"✅ Extracted {len(df)} rows.")
 
-if uploaded_file:
-    with st.spinner("🔄 Converting PDF to text..."):
-        try:
-            # Convert PDF pages to images
-            images = convert_from_bytes(uploaded_file.read(), dpi=300)
+        st.subheader("📋 Full Table")
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
-            all_text = ""
-            for i, img in enumerate(images):
-                text = pytesseract.image_to_string(img)
-                all_text += f"\n\n--- Page {i+1} ---\n{text}"
+        # Pasted search values
+        pasted_values = [x.strip() for x in input_text.splitlines() if x.strip()]
+        matched_df = df[df.apply(lambda row: any(val in str(cell) for val in pasted_values for cell in row), axis=1)]
 
-            st.success("✅ OCR completed!")
-            st.text_area("📄 Extracted Text", all_text, height=300)
+        st.subheader("🎯 Matched Results")
+        st.success(f"✅ Found {len(matched_df)} matching row(s).")
+        st.dataframe(matched_df, use_container_width=True, hide_index=True)
 
-            # Allow user to download the result
-            result_bytes = BytesIO(all_text.encode("utf-8"))
-            st.download_button("📥 Download as .txt", data=result_bytes, file_name="ocr_output.txt")
-
-        except Exception as e:
-            st.error(f"❌ An error occurred: {e}")
+        # Download button
+        output = io.BytesIO()
+        matched_df.to_excel(output, index=False)
+        st.download_button("📥 Download Matched Results as Excel",
+                           data=output.getvalue(),
+                           file_name="matched_results.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
