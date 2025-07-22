@@ -4,112 +4,112 @@ import pandas as pd
 import io
 import re
 
-st.set_page_config(page_title="🎓 Merit PDF Checker", layout="centered")
-st.title("🎓 Merit List PDF Checker (Robust Extraction)")
+# --- Streamlit Page Configuration ---
+st.set_page_config(page_title="🎓 Merit PDF Checker", layout="wide")
+st.title("🎓 Merit List PDF Extractor & Search Tool")
+st.write("Upload a merit list in PDF format and paste Roll Numbers or Registration Numbers to find specific records.")
 
-# Upload and input
-pdf_file = st.file_uploader("📄 Upload Merit List PDF", type=["pdf"])
-input_text = st.text_area("🔍 Paste Roll / Application / Reg. Numbers (one per line):", height=150)
-search_button = st.button("🔎 Extract & Search")
+# --- File Upload and User Input ---
+# Use columns for a cleaner layout
+col1, col2 = st.columns([1, 1])
 
-# Main logic
-if pdf_file and search_button:
-    with st.spinner("🔍 Extracting from PDF..."):
-        doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-        
-        all_extracted_records = []
-        headers = []
+with col1:
+    pdf_file = st.file_uploader("📄 **Upload Merit List PDF**", type=["pdf"])
 
-        for page_num, page in enumerate(doc):
-            text = page.get_text("text")
-            lines = [line.strip() for line in text.splitlines() if line.strip()]
+with col2:
+    input_text = st.text_area(
+        "📝 **Paste Roll / Registration Numbers** (one per line):",
+        height=150,
+        placeholder="801437\n25REG00000924\n..."
+    )
 
-            # Attempt to find headers dynamically on the first page or if not found yet
-            if not headers:
-                # Common header patterns to look for
-                potential_headers = [
-                    "MERIT", "APPLICANT REGISTRATION NO.", "ENTRANCE ROLL NUMBER", 
-                    "CATEGORY", "MARKS OBTAINED IN NFAT", "MARKS C" # "MARKS C" from image_1e5900.png
-                ]
-                # Look for a line that contains several of these keywords
-                for line_idx, line in enumerate(lines):
-                    if all(header_part in line for header_part in ["MERIT", "APPLICANT REGISTRATION"]):
-                        # This line likely contains the headers
-                        headers = [h.strip() for h in re.split(r'\s{2,}|(?<=\D)(?=\d)|(?<=\d)(?=\D)', line) if h.strip()]
-                        # Clean up headers, e.g., combine "APPLICANT REGISTRATION NO."
-                        if "APPLICANT REGISTRATION" in headers and "NO." in headers:
-                            idx1 = headers.index("APPLICANT REGISTRATION")
-                            idx2 = headers.index("NO.")
-                            if idx2 == idx1 + 1:
-                                headers[idx1] = "APPLICANT REGISTRATION NO."
-                                headers.pop(idx2)
-                        
-                        if "ENTRANCE" in headers and "ROLL NUMBER" in headers:
-                             idx1 = headers.index("ENTRANCE")
-                             idx2 = headers.index("ROLL NUMBER")
-                             if idx2 == idx1 + 1:
-                                 headers[idx1] = "ENTRANCE ROLL NUMBER"
-                                 headers.pop(idx2)
-                        
-                        # Handle "MARKS C" as a header if present
-                        if "MARKS C" in headers:
-                            headers[headers.index("MARKS C")] = "MARKS OBTAINED IN NFAT" # Harmonize if possible
+search_button = st.button("🔎 **Extract & Search Results**", use_container_width=True)
 
+# --- Main Logic ---
+if search_button and pdf_file and input_text:
+    with st.spinner("Analyzing PDF and searching for records..."):
+        try:
+            # --- 1. PDF Text Extraction ---
+            doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
 
-                        # Start processing data from after the header line
-                        lines = lines[line_idx + 1:]
-                        break
-            
-            # If headers are found, process the remaining lines as potential data
-            if headers:
-                num_fields = len(headers)
-                current_record = []
+            # --- 2. Define Headers and Data Storage ---
+            # Using static headers is more reliable than dynamic parsing from raw text.
+            # These headers correspond to the capturing groups in our regex.
+            headers = ["Merit Rank", "Applicant Registration No.", "Entrance Roll Number", "Category", "Marks Obtained in NFAT"]
+            all_rows = []
+
+            # --- 3. Define the Regular Expression for a Data Row ---
+            # This regex is designed to be robust and capture the five key fields,
+            # even when the "Category" field contains spaces.
+            # It looks for:
+            # 1. (\d+)                      - Merit Rank (one or more digits)
+            # 2. ([A-Z0-9\S]+)              - Registration Number (a block of non-space chars)
+            # 3. (\d{6,})                   - Entrance Roll Number (6 or more digits)
+            # 4. (.+?)                      - Category (any characters, non-greedy)
+            # 5. ([\d\.:]+)$                - Marks (digits, dots, or colons at the end of the line)
+            data_row_regex = re.compile(r"^(\d+)\s+([A-Z0-9\S]+)\s+(\d{6,})\s+(.+?)\s+([\d\.:]+)$")
+
+            # --- 4. Process Each Page ---
+            for page_num, page in enumerate(doc):
+                text = page.get_text("text")
+                lines = text.splitlines()
+
                 for line in lines:
-                    # Heuristic to determine if a line is part of a data record
-                    # Check for common patterns: a number at the start, "25REG" pattern, "800" for roll numbers
-                    if re.match(r'^\d+(\.\d+)?$', line) or re.match(r'^\d{2}REG\d{7,}', line) or re.match(r'^\d{6,}', line):
-                        current_record.append(line)
-                        if len(current_record) == num_fields:
-                            all_extracted_records.append(current_record)
-                            current_record = []
-                    else:
-                        # If the line doesn't match a data pattern, it might be a continuation of the last field
-                        # Or it might be page number/irrelevant text.
-                        # For now, we'll try to append it to the last field if a record is partially built
-                        # This is a very basic attempt and might need more sophistication based on actual PDF structure
-                        if current_record and not re.match(r'Page \d+ of \d+', line): # Avoid page numbers
-                            # Try to append if it looks like a continuation of a multi-word field,
-                            # e.g., "NATIONAL SCHOOL OF MANAGEMENT STUDIES" being split
-                            # For now, we'll assume each field is on its own line for this structure.
-                            # If a field spans multiple lines, this part needs more robust logic.
-                            pass # We are assuming one field per line for these records
+                    # Check if the line matches our data row pattern
+                    match = data_row_regex.match(line.strip())
+                    if match:
+                        # Extract all 5 captured groups from the match
+                        row_data = list(match.groups())
+                        
+                        # Clean the marks column (replace ':' with '.' for consistency)
+                        row_data[4] = row_data[4].replace(':', '.')
+                        
+                        all_rows.append(row_data)
 
-        if headers and all_extracted_records:
-            df = pd.DataFrame(all_extracted_records, columns=headers)
-            st.success(f"✅ Extracted {len(df)} rows.")
-
-            st.subheader("📋 Full Table")
-            st.dataframe(df, use_container_width=True, hide_index=True)
-
-            # Pasted search values
-            pasted_values = [x.strip() for x in input_text.splitlines() if x.strip()]
-            
-            # Search across all columns for the pasted values
-            matched_df = df[df.apply(lambda row: any(str(val).strip() == pasted_value for pasted_value in pasted_values for val in row), axis=1)]
-
-            st.subheader("🎯 Matched Results")
-            if not matched_df.empty:
-                st.success(f"✅ Found {len(matched_df)} matching row(s).")
-                st.dataframe(matched_df, use_container_width=True, hide_index=True)
-
-                # Download button
-                output = io.BytesIO()
-                matched_df.to_excel(output, index=False)
-                st.download_button("📥 Download Matched Results as Excel",
-                                   data=output.getvalue(),
-                                   file_name="matched_results.xlsx",
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            # --- 5. Create and Display DataFrame ---
+            if not all_rows:
+                st.error("❌ **No data found.** Could not find any data matching the expected table format in the PDF.")
             else:
-                st.warning("No matching records found for the provided input.")
-        else:
-            st.error("❌ Could not extract data or headers. Please ensure the PDF contains a clear tabular structure.")
+                df = pd.DataFrame(all_rows, columns=headers)
+                
+                # Convert marks to a numeric type for correct sorting
+                df["Marks Obtained in NFAT"] = pd.to_numeric(df["Marks Obtained in NFAT"], errors='coerce')
+
+                st.success(f"✅ **Extraction Complete:** Found and processed **{len(df)}** records from the PDF.")
+
+                # --- 6. Search for Matched Records ---
+                pasted_values = [v.strip() for v in input_text.splitlines() if v.strip()]
+
+                # Search in both registration number and roll number columns
+                matched_df = df[
+                    df["Applicant Registration No."].str.strip().isin(pasted_values) |
+                    df["Entrance Roll Number"].str.strip().isin(pasted_values)
+                ]
+
+                st.subheader("🎯 Matched Results")
+                if not matched_df.empty:
+                    st.dataframe(matched_df, use_container_width=True, hide_index=True)
+
+                    # --- 7. Provide Download Button for Matched Results ---
+                    output = io.BytesIO()
+                    matched_df.to_excel(output, index=False, sheet_name="Matched_Results")
+                    st.download_button(
+                        label="📥 **Download Matched Results as Excel**",
+                        data=output.getvalue(),
+                        file_name="matched_merit_list_results.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("⚠️ No matching records were found for the numbers you provided.")
+
+                # --- Optional: Display Full Extracted Table ---
+                with st.expander("📂 **View Full Extracted Merit List**"):
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
+
+# Instructions for when the app first loads or buttons aren't pressed
+elif search_button:
+    st.warning("Please upload a PDF and paste at least one number to search.")
