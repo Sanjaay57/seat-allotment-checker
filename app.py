@@ -26,28 +26,27 @@ with col2:
 search_button = st.button("🔎 **Extract & Search Results**", use_container_width=True)
 
 # --- Main Logic ---
-if search_button and pdf_file and input_text:
+if search_button and pdf_file:
     with st.spinner("Analyzing PDF and searching for records..."):
         try:
             # --- 1. PDF Text Extraction ---
             doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
 
             # --- 2. Define Headers and Data Storage ---
-            # Using static headers is more reliable than dynamic parsing from raw text.
-            # These headers correspond to the capturing groups in our regex.
             headers = ["Merit Rank", "Applicant Registration No.", "Entrance Roll Number", "Category", "Marks Obtained in NFAT"]
             all_rows = []
+            
+            # **FIX**: Variable to hold the rank for rows where it's not explicitly listed
+            last_merit_rank = None
 
-            # --- 3. Define the Regular Expression for a Data Row ---
-            # This regex is designed to be robust and capture the five key fields,
-            # even when the "Category" field contains spaces.
-            # It looks for:
-            # 1. (\d+)                      - Merit Rank (one or more digits)
-            # 2. ([A-Z0-9\S]+)              - Registration Number (a block of non-space chars)
-            # 3. (\d{6,})                   - Entrance Roll Number (6 or more digits)
-            # 4. (.+?)                      - Category (any characters, non-greedy)
-            # 5. ([\d\.:]+)$                - Marks (digits, dots, or colons at the end of the line)
-            data_row_regex = re.compile(r"^(\d+)\s+([A-Z0-9\S]+)\s+(\d{6,})\s+(.+?)\s+([\d\.:]+)$")
+            # --- 3. Define Regular Expressions for Data Rows ---
+            # **FIX**: Two patterns are now used. One for rows with a rank, and one for rows without.
+            
+            # Pattern for a standard row starting with a merit rank
+            regex_with_rank = re.compile(r"^(\d+)\s+([A-Z0-9\S]+)\s+(\d{6,})\s+(.+?)\s+([\d\.:]+)$")
+            
+            # Pattern for a row that is missing the initial merit rank
+            regex_without_rank = re.compile(r"^([A-Z0-9\S]+)\s+(\d{6,})\s+(.+?)\s+([\d\.:]+)$")
 
             # --- 4. Process Each Page ---
             for page_num, page in enumerate(doc):
@@ -55,16 +54,28 @@ if search_button and pdf_file and input_text:
                 lines = text.splitlines()
 
                 for line in lines:
-                    # Check if the line matches our data row pattern
-                    match = data_row_regex.match(line.strip())
-                    if match:
-                        # Extract all 5 captured groups from the match
-                        row_data = list(match.groups())
-                        
-                        # Clean the marks column (replace ':' with '.' for consistency)
+                    line = line.strip()
+                    # First, try to match the pattern that includes the rank
+                    match_with_rank = regex_with_rank.match(line)
+                    
+                    if match_with_rank:
+                        row_data = list(match_with_rank.groups())
+                        # This line has a rank, so we update our tracker
+                        last_merit_rank = row_data[0]
+                        # Clean the marks column for consistency
                         row_data[4] = row_data[4].replace(':', '.')
-                        
                         all_rows.append(row_data)
+                    else:
+                        # If the first pattern failed, try the one for rows without a rank
+                        match_without_rank = regex_without_rank.match(line)
+                        if match_without_rank and last_merit_rank:
+                            # This row is missing a rank, so we use the last one we saw
+                            row_data = list(match_without_rank.groups())
+                            # **FIX**: Manually insert the last seen rank at the beginning of the list
+                            row_data.insert(0, last_merit_rank)
+                            # Clean the marks column
+                            row_data[4] = row_data[4].replace(':', '.')
+                            all_rows.append(row_data)
 
             # --- 5. Create and Display DataFrame ---
             if not all_rows:
@@ -77,31 +88,31 @@ if search_button and pdf_file and input_text:
 
                 st.success(f"✅ **Extraction Complete:** Found and processed **{len(df)}** records from the PDF.")
 
-                # --- 6. Search for Matched Records ---
-                pasted_values = [v.strip() for v in input_text.splitlines() if v.strip()]
+                # --- 6. Search for Matched Records if input is provided ---
+                if input_text.strip():
+                    pasted_values = [v.strip() for v in input_text.splitlines() if v.strip()]
+                    
+                    matched_df = df[
+                        df["Applicant Registration No."].str.strip().isin(pasted_values) |
+                        df["Entrance Roll Number"].str.strip().isin(pasted_values)
+                    ]
 
-                # Search in both registration number and roll number columns
-                matched_df = df[
-                    df["Applicant Registration No."].str.strip().isin(pasted_values) |
-                    df["Entrance Roll Number"].str.strip().isin(pasted_values)
-                ]
+                    st.subheader("🎯 Matched Results")
+                    if not matched_df.empty:
+                        st.dataframe(matched_df, use_container_width=True, hide_index=True)
 
-                st.subheader("🎯 Matched Results")
-                if not matched_df.empty:
-                    st.dataframe(matched_df, use_container_width=True, hide_index=True)
-
-                    # --- 7. Provide Download Button for Matched Results ---
-                    output = io.BytesIO()
-                    matched_df.to_excel(output, index=False, sheet_name="Matched_Results")
-                    st.download_button(
-                        label="📥 **Download Matched Results as Excel**",
-                        data=output.getvalue(),
-                        file_name="matched_merit_list_results.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("⚠️ No matching records were found for the numbers you provided.")
+                        # --- 7. Provide Download Button for Matched Results ---
+                        output = io.BytesIO()
+                        matched_df.to_excel(output, index=False, sheet_name="Matched_Results")
+                        st.download_button(
+                            label="📥 **Download Matched Results as Excel**",
+                            data=output.getvalue(),
+                            file_name="matched_merit_list_results.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                    else:
+                        st.warning("⚠️ No matching records were found for the numbers you provided.")
 
                 # --- Optional: Display Full Extracted Table ---
                 with st.expander("📂 **View Full Extracted Merit List**"):
@@ -110,6 +121,6 @@ if search_button and pdf_file and input_text:
         except Exception as e:
             st.error(f"An error occurred: {e}")
 
-# Instructions for when the app first loads or buttons aren't pressed
+# Instructions for when the app first loads or button is pressed without a file
 elif search_button:
-    st.warning("Please upload a PDF and paste at least one number to search.")
+    st.warning("Please upload a PDF file to begin.")
